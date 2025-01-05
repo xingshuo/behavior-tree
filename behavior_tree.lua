@@ -1,4 +1,5 @@
-﻿local CoPool = require("co_pool")
+﻿local Coroutines = require("coroutines")
+local Env = require("env")
 
 local bret = {
 	FAIL	= "FAIL",
@@ -8,44 +9,44 @@ local bret = {
 }
 
 
-function NewIfElseNode(env, data)
-	local funcs = {}
-	for i, child in ipairs(data.children) do
-		funcs[i] = GenerateNode(env, child)
+function NewIfElseNode(env, nodeData)
+	local children = {}
+	for i, childData in ipairs(nodeData.children) do
+		children[i] = GenerateNode(env, childData)
 	end
-	return function (env)
-		if funcs[1](env) == bret.SUCCESS then
-			return funcs[2](env)
-		else
-			if not funcs[3] then
-				return bret.FAIL
-			end
-			return funcs[3](env)
+	return function ()
+		if children[1]() == bret.SUCCESS then
+			return children[2]()
 		end
+		local child = children[3]
+		if not child then
+			return bret.FAIL
+		end
+		return child()
 	end
 end
 
-function NewParallelNode(env, data)
-	local funcs = {}
-	for i, child in ipairs(data.children) do
-		funcs[i] = GenerateNode(env, child)
+function NewParallelNode(env, nodeData)
+	local children = {}
+	for i, childData in ipairs(nodeData.children) do
+		children[i] = GenerateNode(env, childData)
 	end
-	return function (env)
-		for _, func in ipairs(funcs) do
-			func(env)
+	return function ()
+		for _, child in ipairs(children) do
+			child()
 		end
 		return bret.SUCCESS
 	end
 end
 
-function NewSelectorNode(env, data)
-	local funcs = {}
-	for i, child in ipairs(data.children) do
-		funcs[i] = GenerateNode(env, child)
+function NewSelectorNode(env, nodeData)
+	local children = {}
+	for i, childData in ipairs(nodeData.children) do
+		children[i] = GenerateNode(env, childData)
 	end
-	return function (env)
-		for _, func in ipairs(funcs) do
-			if func(env) == bret.SUCCESS then
+	return function ()
+		for _, child in ipairs(children) do
+			if child() == bret.SUCCESS then
 				return bret.SUCCESS
 			end
 		end
@@ -53,14 +54,14 @@ function NewSelectorNode(env, data)
 	end
 end
 
-function NewSequenceNode(env, data)
-	local funcs = {}
-	for i, child in ipairs(data.children) do
-		funcs[i] = GenerateNode(env, child)
+function NewSequenceNode(env, nodeData)
+	local children = {}
+	for i, childData in ipairs(nodeData.children) do
+		children[i] = GenerateNode(env, childData)
 	end
-	return function (env)
-		for _, func in ipairs(funcs) do
-			if func(env) == bret.FAIL then
+	return function ()
+		for _, child in ipairs(children) do
+			if child() == bret.FAIL then
 				return bret.FAIL
 			end
 		end
@@ -74,16 +75,12 @@ local function runCode(env, code)
 	return func(env.vars, math)
 end
 
-function NewCheckNode(env, data)
-	local funcs = {}
-	for i, child in ipairs(data.children) do
-		funcs[i] = GenerateNode(env, child)
-	end
-	return function (env)
-		if not data.args then
+function NewCheckNode(env, nodeData)
+	return function ()
+		if not nodeData.args then
 			return bret.FAIL
 		end
-		local code = data.args["value"]
+		local code = nodeData.args["value"]
 		if not code then
 			return bret.FAIL
 		end
@@ -95,13 +92,9 @@ local function ret(r)
 	return r and bret.SUCCESS or bret.FAIL
 end
 
-function NewCmpNode(env, data)
-	local funcs = {}
-	for i, child in ipairs(data.children) do
-		funcs[i] = GenerateNode(env, child)
-	end
-	return function (env)
-		local args = data.args
+function NewCmpNode(env, nodeData)
+	return function ()
+		local args = nodeData.args
 		local code = args["value"]
 		local value = runCode(env, code)
 		assert(type(value) == 'number')
@@ -121,13 +114,13 @@ function NewCmpNode(env, data)
 	end
 end
 
-function NewRepeatNode(env, data)
-	local childNode = GenerateNode(env, data.children[1])
-	return function (env)
-		local args = data.args
+function NewRepeatNode(env, nodeData)
+	local child = GenerateNode(env, nodeData.children[1])
+	return function ()
+		local args = nodeData.args
 		local count = args.count
 		for i = 1, count do
-			if childNode(env) == bret.FAIL then
+			if child() == bret.FAIL then
 				return bret.FAIL
 			end
 		end
@@ -135,34 +128,34 @@ function NewRepeatNode(env, data)
 	end
 end
 
-function NewRepeatUntilSuccessNode(env, data)
-	local childNode = GenerateNode(env, data.children[1])
-	return function (env)
-		local args = data.args
+function NewRepeatUntilSuccessNode(env, nodeData)
+	local child = GenerateNode(env, nodeData.children[1])
+	return function ()
+		local args = nodeData.args
 		local maxLoop = args.maxLoop
 		for i = 1, maxLoop do
-			if childNode(env) == bret.SUCCESS then
+			if child() == bret.SUCCESS then
 				return bret.SUCCESS
 			end
 			if i < maxLoop then
-				CoPool.Yield()
+				Coroutines.Yield(bret.RUNNING)
 			end
 		end
 		return bret.FAIL
 	end
 end
 
-function NewRepeatUntilFailureNode(env, data)
-	local childNode = GenerateNode(env, data.children[1])
-	return function (env)
-		local args = data.args
+function NewRepeatUntilFailureNode(env, nodeData)
+	local child = GenerateNode(env, nodeData.children[1])
+	return function ()
+		local args = nodeData.args
 		local maxLoop = args.maxLoop
 		for i = 1, maxLoop do
-			if childNode(env) == bret.FAIL then
+			if child() == bret.FAIL then
 				return bret.SUCCESS
 			end
 			if i < maxLoop then
-				CoPool.Yield()
+				Coroutines.Yield(bret.RUNNING)
 			end
 		end
 		return bret.FAIL
@@ -170,20 +163,20 @@ function NewRepeatUntilFailureNode(env, data)
 end
 
 
-function NewWaitNode(env, data)
-	return function (env)
-		local args = data.args
+function NewWaitNode(env, nodeData)
+	return function ()
+		local args = nodeData.args
 		local endTime = env.ctx.time + args.time
 		if env.ctx.time >= endTime then
 			return bret.SUCCESS
 		end
-		CoPool.Yield()
+		Coroutines.Yield(bret.RUNNING)
 	end
 end
 
-function NewLogNode(env, data)
-	return function (env)
-		local args = data.args
+function NewLogNode(env, nodeData)
+	return function ()
+		local args = nodeData.args
 		print(args.message)
 		return bret.SUCCESS
 	end
@@ -211,7 +204,14 @@ local GeneratorMap = {
 	Log = NewLogNode,
 }
 
-function GenerateNode(env, data)
-	local generator = assert(GeneratorMap[data.name], data.name)
-	return generator(env, data)
+function GenerateNode(env, nodeData)
+	local generator = assert(GeneratorMap[nodeData.name], nodeData.name)
+	return generator(env, nodeData)
+end
+
+function NewTree(treeData)
+	local tree = {}
+	tree.env = Env.New({tree = tree, ctx = {time = 0}})
+	tree.root = GenerateNode(tree.env, treeData.root)
+	return tree
 end
