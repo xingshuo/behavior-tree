@@ -1,217 +1,103 @@
-﻿local Coroutines = require("coroutines")
+﻿local Node = require("behavior_node")
 local Env = require("env")
+local Coroutines = require("coroutines")
+local Const = require("const")
 
-local bret = {
-	FAIL	= "FAIL",
-	SUCCESS = "SUCCESS",
-	RUNNING = "RUNNING",
-	ABORT   = "ABORT",
-}
+local bret = Const.bret
+local btree_event = Const.btree_event
+local traceback = debug.traceback
+local tostring = tostring
 
+local BehaviorTree = {}
+BehaviorTree.__index = BehaviorTree
 
-function NewIfElseNode(env, nodeData)
-	local children = {}
-	for i, childData in ipairs(nodeData.children) do
-		children[i] = GenerateNode(env, childData)
+function BehaviorTree.New(treeData, ctx)
+	local o = {}
+	setmetatable(o, BehaviorTree)
+	o:init(treeData, ctx)
+	return o
+end
+
+function BehaviorTree:init(treeData, ctx)
+	self.env = Env.New({tree = self, ctx = ctx})
+	self.root = Node.GenerateNode(self.env, treeData.root)
+	self.runStack = nil
+	self.runningNow = false
+end
+
+function BehaviorTree:Run()
+	self.runningNow = true
+	local co = self.runStack
+	if co == nil then
+		co = Coroutines.Create(self.root)
+		self.runStack = co
+		self:Dispatch(btree_event.BEFORE_RUN)
 	end
-	return function ()
-		if children[1]() == bret.SUCCESS then
-			return children[2]()
+	local ok, ret = coroutine.resume(co)
+	if not ok then -- 运行错误，下一次从根节点重新执行
+		self.runStack = nil
+		self.env:ClearInnerVars()
+		local tb = traceback(co,tostring(ret))
+		if coroutine.close then -- above lua 5.4
+			coroutine.close(co)
 		end
-		local child = children[3]
-		if not child then
-			return bret.FAIL
-		end
-		return child()
+		self.runningNow = false
+		print("[ERROR]: btree run err")
+		error(tb)
+	end
+	if self.env.abort then
+		self.env.abort = nil
+		self.runStack = nil
+		self.env:ClearInnerVars()
+		self:Dispatch(btree_event.INTERRUPTED)
+		print("[ERROR]: btree run abort")
+		self.runningNow = false
+		return bret.ABORT
+	elseif ret == bret.SUCCESS then
+		self.runStack = nil
+		self:Dispatch(btree_event.AFTER_RUN)
+		self:Dispatch(btree_event.AFTER_RUN_SUCCESS)
+	elseif ret == bret.FAIL then
+		self.runStack = nil
+		self:Dispatch(btree_event.AFTER_RUN)
+		self:Dispatch(btree_event.AFTER_RUN_FAILURE)
+	end
+	self.runningNow = false
+	print("[INFO]: btree run result: ", ret)
+	return ret
+end
+
+function BehaviorTree:Yield()
+	if self.env.abort then
+		return true
+	end
+	Coroutines.Yield(bret.RUNNING)
+	if self.env.abort then
+		return true
 	end
 end
 
-function NewParallelNode(env, nodeData)
-	local children = {}
-	for i, childData in ipairs(nodeData.children) do
-		children[i] = GenerateNode(env, childData)
-	end
-	return function ()
-		for _, child in ipairs(children) do
-			child()
-		end
-		return bret.SUCCESS
-	end
+function BehaviorTree:Dispatch(event, ...)
+	print("[INFO]: dispatch event: ", event, "args: ", ...)
 end
 
-function NewSelectorNode(env, nodeData)
-	local children = {}
-	for i, childData in ipairs(nodeData.children) do
-		children[i] = GenerateNode(env, childData)
-	end
-	return function ()
-		for _, child in ipairs(children) do
-			if child() == bret.SUCCESS then
-				return bret.SUCCESS
-			end
-		end
-		return bret.FAIL
+-- 返回行为树状态
+function BehaviorTree:IsRunning()
+	return self.runStack ~= nil
+end
+
+function BehaviorTree:Interrupt()
+	assert(not self.runningNow)
+	if self.runStack ~= nil then
+		self.env.abort = true
+		self:Run()
 	end
 end
 
-function NewSequenceNode(env, nodeData)
-	local children = {}
-	for i, childData in ipairs(nodeData.children) do
-		children[i] = GenerateNode(env, childData)
-	end
-	return function ()
-		for _, child in ipairs(children) do
-			if child() == bret.FAIL then
-				return bret.FAIL
-			end
-		end
-		return bret.SUCCESS
-	end
+local M = {}
+
+function M.NewTree(treeData, ctx)
+	return BehaviorTree.New(treeData, ctx)
 end
 
-local function runCode(env, code)
-	code = code:gsub("!=", "~=")
-	local func = load("return function(vars, math) _ENV = vars return " .. code .. " end")()
-	return func(env.vars, math)
-end
-
-function NewCheckNode(env, nodeData)
-	return function ()
-		if not nodeData.args then
-			return bret.FAIL
-		end
-		local code = nodeData.args["value"]
-		if not code then
-			return bret.FAIL
-		end
-		return runCode(env, code) and bret.SUCCESS or bret.FAIL
-	end
-end
-
-local function ret(r)
-	return r and bret.SUCCESS or bret.FAIL
-end
-
-function NewCmpNode(env, nodeData)
-	return function ()
-		local args = nodeData.args
-		local code = args["value"]
-		local value = runCode(env, code)
-		assert(type(value) == 'number')
-		if args.gt then
-			return ret(value > args.gt)
-		elseif args.ge then
-			return ret(value >= args.ge)
-		elseif args.eq then
-			return ret(value == args.eq)
-		elseif args.lt then
-			return ret(value < args.lt)
-		elseif args.le then
-			return ret(value <= args.le)
-		else
-			error('args error')
-		end
-	end
-end
-
-function NewRepeatNode(env, nodeData)
-	local child = GenerateNode(env, nodeData.children[1])
-	return function ()
-		local args = nodeData.args
-		local count = args.count
-		for i = 1, count do
-			if child() == bret.FAIL then
-				return bret.FAIL
-			end
-		end
-		return bret.SUCCESS
-	end
-end
-
-function NewRepeatUntilSuccessNode(env, nodeData)
-	local child = GenerateNode(env, nodeData.children[1])
-	return function ()
-		local args = nodeData.args
-		local maxLoop = args.maxLoop
-		for i = 1, maxLoop do
-			if child() == bret.SUCCESS then
-				return bret.SUCCESS
-			end
-			if i < maxLoop then
-				Coroutines.Yield(bret.RUNNING)
-			end
-		end
-		return bret.FAIL
-	end
-end
-
-function NewRepeatUntilFailureNode(env, nodeData)
-	local child = GenerateNode(env, nodeData.children[1])
-	return function ()
-		local args = nodeData.args
-		local maxLoop = args.maxLoop
-		for i = 1, maxLoop do
-			if child() == bret.FAIL then
-				return bret.SUCCESS
-			end
-			if i < maxLoop then
-				Coroutines.Yield(bret.RUNNING)
-			end
-		end
-		return bret.FAIL
-	end
-end
-
-
-function NewWaitNode(env, nodeData)
-	return function ()
-		local args = nodeData.args
-		local endTime = env.ctx.time + args.time
-		if env.ctx.time >= endTime then
-			return bret.SUCCESS
-		end
-		Coroutines.Yield(bret.RUNNING)
-	end
-end
-
-function NewLogNode(env, nodeData)
-	return function ()
-		local args = nodeData.args
-		print(args.message)
-		return bret.SUCCESS
-	end
-end
-
-
-local GeneratorMap = {
-	-- Composite Node
-	IfElse = NewIfElseNode,
-	Parallel = NewParallelNode,
-	Selector = NewSelectorNode,
-	Sequence = NewSequenceNode,
-
-	-- Condition Nodes
-	Check = NewCheckNode,
-	Cmp = NewCmpNode,
-
-	-- Decorator Nodes
-	Repeat = NewRepeatNode,
-	RepeatUntilSuccess = NewRepeatUntilSuccessNode,
-	RepeatUntilFailure = NewRepeatUntilFailureNode,
-
-	-- Action Nodes
-	Wait = NewWaitNode,
-	Log = NewLogNode,
-}
-
-function GenerateNode(env, nodeData)
-	local generator = assert(GeneratorMap[nodeData.name], nodeData.name)
-	return generator(env, nodeData)
-end
-
-function NewTree(treeData)
-	local tree = {}
-	tree.env = Env.New({tree = tree, ctx = {time = 0}})
-	tree.root = GenerateNode(tree.env, treeData.root)
-	return tree
-end
+return M
