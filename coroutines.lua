@@ -1,6 +1,7 @@
 ﻿local coroutine = coroutine
 local table = table
-
+local traceback = debug.traceback
+local tostring = tostring
 local coroutine_pool = setmetatable({}, { __mode = "kv" })
 
 local M = {}
@@ -33,7 +34,11 @@ function M.Resume(co, ...)
 	local ok = rets[1]
 	if not ok then
 		local msg = rets[2]
-		error(msg, 2)
+		local tb = traceback(co,tostring(msg))
+		if coroutine.close then -- above lua 5.4
+			coroutine.close(co)
+		end
+		error(tb)
 	end
 	return table.unpack(rets, 2)
 end
