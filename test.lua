@@ -13,11 +13,11 @@ local function test_parallel()
 	local treeData = load_tree("trees/test-parallel.json")
 	local ctx = {time = 1}
 	local btree = BTree.NewTree(treeData, ctx)
+	for i = 1, 6 do
+		ctx.time = ctx.time + 1
+		btree:run()
+	end
 	print("=================== test parallel ========================")
 end
 
-local function main()
-	
-end
-
-main()
+test_parallel()

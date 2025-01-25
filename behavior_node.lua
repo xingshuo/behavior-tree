@@ -1,16 +1,20 @@
-﻿local Process = require("sample_process")
-local Const = require("const")
+﻿local Const = require("const")
 
 local bret = Const.bret
+
+local process = nil
 
 local M = {}
 
 function M.Process(custom)
-	Process = custom
+	process = custom
 end
 
 function M.GenerateNode(env, nodeData)
-	local builder = assert(Process[nodeData.name], nodeData.name)
+	if not process then
+		process = require("sample_process")
+	end
+	local builder = assert(process[nodeData.name], nodeData.name)
 	local run = builder(env, nodeData)
 	return function ()
 		if env.abort then
