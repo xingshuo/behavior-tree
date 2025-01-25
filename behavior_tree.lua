@@ -50,7 +50,7 @@ function BehaviorTree:Run()
 		self.runStack = nil
 		self.env:ClearInnerVars()
 		self:Dispatch(btree_event.INTERRUPTED)
-		print("[ERROR]: btree run abort")
+		print("[WARN]: btree run abort")
 		self.runningNow = false
 		return bret.ABORT
 	elseif ret == bret.SUCCESS then
@@ -81,12 +81,13 @@ function BehaviorTree:Dispatch(event, ...)
 	print("[INFO]: dispatch event: ", event, "args: ", ...)
 end
 
--- 返回行为树状态
+-- 返回行为树运行状态，而非是否处于BehaviorTree:Run()中
 function BehaviorTree:IsRunning()
 	return self.runStack ~= nil
 end
 
 function BehaviorTree:Interrupt()
+	-- 行为树内部只能通过return bret.ABORT来实现打断
 	assert(not self.runningNow)
 	if self.runStack ~= nil then
 		self.env.abort = true

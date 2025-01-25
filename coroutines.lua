@@ -43,6 +43,7 @@ function M.Resume(co, ...)
 	return table.unpack(rets, 2)
 end
 
+-- TODO: trace log
 function M.Yield(...)
     return coroutine.yield(...)
 end
