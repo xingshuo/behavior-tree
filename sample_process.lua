@@ -17,7 +17,7 @@ return {
 	-- 条件节点
 
 	-- 行为节点
-	Log                = require "behavior3.nodes.actions.log",
-	Wait               = require "behavior3.nodes.actions.wait",
-	WaitForCount       = require "behavior3.nodes.actions.wait_for_count",
+	Log                = require "nodes.actions.log",
+	Wait               = require "nodes.actions.wait",
+	WaitForCount       = require "nodes.actions.wait_for_count",
 }
